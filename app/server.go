@@ -48,16 +48,28 @@ func handleConnection(conn net.Conn) {
 
 	path := parts[1]
 
-	var response string
 	if path == "/" {
-		response = "HTTP/1.1 200 OK\r\n\r\n"
+		sendResponse(conn, "200 OK", "", "")
+	} else if strings.HasPrefix(path, "/echo/") {
+		echoStr := strings.TrimPrefix(path, "/echo/")
+		sendResponse(conn, "200 OK", "text/plain", echoStr)
 	} else {
-		response = "HTTP/1.1 404 Not Found\r\n\r\n"
+		sendResponse(conn, "404 Not Found", "", "")
+	}
+}
+
+func sendResponse(conn net.Conn, status, contentType, body string) {
+	response := fmt.Sprintf("HTTP/1.1 %s\r\n", status)
+
+	if contentType != "" {
+		response += fmt.Sprintf("Content-Type: %s\r\n", contentType)
+		response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
 	}
 
-	_, err = conn.Write([]byte(response))
+	response += "\r\n" + body
+
+	_, err := conn.Write([]byte(response))
 	if err != nil {
 		fmt.Println("Error writing to connection:", err.Error())
-		return
 	}
 }
