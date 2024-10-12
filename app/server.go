@@ -39,20 +39,39 @@ func handleConnection(conn net.Conn) {
 	}
 
 	request := string(buffer[:n])
-	requestLine := strings.Split(request, "\r\n")[0]
-	parts := strings.Split(requestLine, " ")
-	if len(parts) < 2 {
+	lines := strings.Split(request, "\r\n")
+	if len(lines) < 1 {
 		fmt.Println("Invalid request format")
 		return
 	}
 
-	path := parts[1]
+	requestLine := strings.Split(lines[0], " ")
+	if len(requestLine) < 2 {
+		fmt.Println("Invalid request line format")
+		return
+	}
+
+	path := requestLine[1]
+
+	headers := make(map[string]string)
+	for _, line := range lines[1:] {
+		if line == "" {
+			break
+		}
+		parts := strings.SplitN(line, ": ", 2)
+		if len(parts) == 2 {
+			headers[strings.ToLower(parts[0])] = parts[1]
+		}
+	}
 
 	if path == "/" {
 		sendResponse(conn, "200 OK", "", "")
 	} else if strings.HasPrefix(path, "/echo/") {
 		echoStr := strings.TrimPrefix(path, "/echo/")
 		sendResponse(conn, "200 OK", "text/plain", echoStr)
+	} else if path == "/user-agent" {
+		userAgent := headers["user-agent"]
+		sendResponse(conn, "200 OK", "text/plain", userAgent)
 	} else {
 		sendResponse(conn, "404 Not Found", "", "")
 	}
