@@ -1,13 +1,22 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
+var directory string
+
 func main() {
+	// Parse command-line flags
+	flag.StringVar(&directory, "directory", "", "the directory to serve files from")
+	flag.Parse()
+
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
 		fmt.Println("Failed to bind to port 4221")
@@ -31,6 +40,7 @@ func main() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	// Read the request
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
@@ -38,6 +48,7 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	// Parse the request
 	request := string(buffer[:n])
 	lines := strings.Split(request, "\r\n")
 	if len(lines) < 1 {
@@ -45,6 +56,7 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	// Parse the request line
 	requestLine := strings.Split(lines[0], " ")
 	if len(requestLine) < 2 {
 		fmt.Println("Invalid request line format")
@@ -53,6 +65,7 @@ func handleConnection(conn net.Conn) {
 
 	path := requestLine[1]
 
+	// Parse headers
 	headers := make(map[string]string)
 	for _, line := range lines[1:] {
 		if line == "" {
@@ -64,6 +77,7 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
+	// Handle different paths
 	if path == "/" {
 		sendResponse(conn, "200 OK", "", "")
 	} else if strings.HasPrefix(path, "/echo/") {
@@ -72,9 +86,32 @@ func handleConnection(conn net.Conn) {
 	} else if path == "/user-agent" {
 		userAgent := headers["user-agent"]
 		sendResponse(conn, "200 OK", "text/plain", userAgent)
+	} else if strings.HasPrefix(path, "/files/") {
+		if directory == "" {
+			sendResponse(conn, "404 Not Found", "", "")
+		} else {
+			filename := strings.TrimPrefix(path, "/files/")
+			handleFileRequest(conn, filename)
+		}
 	} else {
 		sendResponse(conn, "404 Not Found", "", "")
 	}
+}
+
+func handleFileRequest(conn net.Conn, filename string) {
+	filePath := filepath.Join(directory, filename)
+	content, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			sendResponse(conn, "404 Not Found", "", "")
+		} else {
+			fmt.Println("Error reading file:", err.Error())
+			sendResponse(conn, "500 Internal Server Error", "", "")
+		}
+		return
+	}
+
+	sendResponse(conn, "200 OK", "application/octet-stream", string(content))
 }
 
 func sendResponse(conn net.Conn, status, contentType, body string) {
