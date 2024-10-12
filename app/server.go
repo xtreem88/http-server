@@ -7,13 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 var directory string
 
 func main() {
-	// Parse command-line flags
 	flag.StringVar(&directory, "directory", "", "the directory to serve files from")
 	flag.Parse()
 
@@ -40,7 +40,6 @@ func main() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	// Read the request
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
@@ -48,7 +47,6 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Parse the request
 	request := string(buffer[:n])
 	lines := strings.Split(request, "\r\n")
 	if len(lines) < 1 {
@@ -56,19 +54,20 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Parse the request line
 	requestLine := strings.Split(lines[0], " ")
-	if len(requestLine) < 2 {
+	if len(requestLine) < 3 {
 		fmt.Println("Invalid request line format")
 		return
 	}
 
+	method := requestLine[0]
 	path := requestLine[1]
 
-	// Parse headers
 	headers := make(map[string]string)
-	for _, line := range lines[1:] {
+	var bodyStart int
+	for i, line := range lines[1:] {
 		if line == "" {
+			bodyStart = i + 2
 			break
 		}
 		parts := strings.SplitN(line, ": ", 2)
@@ -77,7 +76,16 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
-	// Handle different paths
+	if method == "GET" {
+		handleGetRequest(conn, path, headers)
+	} else if method == "POST" {
+		handlePostRequest(conn, path, headers, strings.Join(lines[bodyStart:], "\r\n"))
+	} else {
+		sendResponse(conn, "405 Method Not Allowed", "", "")
+	}
+}
+
+func handleGetRequest(conn net.Conn, path string, headers map[string]string) {
 	if path == "/" {
 		sendResponse(conn, "200 OK", "", "")
 	} else if strings.HasPrefix(path, "/echo/") {
@@ -96,6 +104,44 @@ func handleConnection(conn net.Conn) {
 	} else {
 		sendResponse(conn, "404 Not Found", "", "")
 	}
+}
+
+func handlePostRequest(conn net.Conn, path string, headers map[string]string, body string) {
+	if !strings.HasPrefix(path, "/files/") || directory == "" {
+		sendResponse(conn, "404 Not Found", "", "")
+		return
+	}
+
+	filename := strings.TrimPrefix(path, "/files/")
+	filePath := filepath.Join(directory, filename)
+
+	contentLength, err := strconv.Atoi(headers["content-length"])
+	if err != nil {
+		fmt.Println("Invalid Content-Length:", err.Error())
+		sendResponse(conn, "400 Bad Request", "", "")
+		return
+	}
+
+	if len(body) < contentLength {
+		remainingBytes := contentLength - len(body)
+		additionalBuffer := make([]byte, remainingBytes)
+		_, err := conn.Read(additionalBuffer)
+		if err != nil {
+			fmt.Println("Error reading additional data:", err.Error())
+			sendResponse(conn, "500 Internal Server Error", "", "")
+			return
+		}
+		body += string(additionalBuffer)
+	}
+
+	err = ioutil.WriteFile(filePath, []byte(body), 0644)
+	if err != nil {
+		fmt.Println("Error writing file:", err.Error())
+		sendResponse(conn, "500 Internal Server Error", "", "")
+		return
+	}
+
+	sendResponse(conn, "201 Created", "", "")
 }
 
 func handleFileRequest(conn net.Conn, filename string) {
