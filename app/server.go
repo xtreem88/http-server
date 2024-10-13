@@ -76,39 +76,41 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
+	acceptsGzip := strings.Contains(headers["accept-encoding"], "gzip")
+
 	if method == "GET" {
-		handleGetRequest(conn, path, headers)
+		handleGetRequest(conn, path, headers, acceptsGzip)
 	} else if method == "POST" {
-		handlePostRequest(conn, path, headers, strings.Join(lines[bodyStart:], "\r\n"))
+		handlePostRequest(conn, path, headers, strings.Join(lines[bodyStart:], "\r\n"), acceptsGzip)
 	} else {
-		sendResponse(conn, "405 Method Not Allowed", "", "")
+		sendResponse(conn, "405 Method Not Allowed", "", "", false)
 	}
 }
 
-func handleGetRequest(conn net.Conn, path string, headers map[string]string) {
+func handleGetRequest(conn net.Conn, path string, headers map[string]string, acceptsGzip bool) {
 	if path == "/" {
-		sendResponse(conn, "200 OK", "", "")
+		sendResponse(conn, "200 OK", "", "", acceptsGzip)
 	} else if strings.HasPrefix(path, "/echo/") {
 		echoStr := strings.TrimPrefix(path, "/echo/")
-		sendResponse(conn, "200 OK", "text/plain", echoStr)
+		sendResponse(conn, "200 OK", "text/plain", echoStr, acceptsGzip)
 	} else if path == "/user-agent" {
 		userAgent := headers["user-agent"]
-		sendResponse(conn, "200 OK", "text/plain", userAgent)
+		sendResponse(conn, "200 OK", "text/plain", userAgent, acceptsGzip)
 	} else if strings.HasPrefix(path, "/files/") {
 		if directory == "" {
-			sendResponse(conn, "404 Not Found", "", "")
+			sendResponse(conn, "404 Not Found", "", "", acceptsGzip)
 		} else {
 			filename := strings.TrimPrefix(path, "/files/")
-			handleFileRequest(conn, filename)
+			handleFileRequest(conn, filename, acceptsGzip)
 		}
 	} else {
-		sendResponse(conn, "404 Not Found", "", "")
+		sendResponse(conn, "404 Not Found", "", "", acceptsGzip)
 	}
 }
 
-func handlePostRequest(conn net.Conn, path string, headers map[string]string, body string) {
+func handlePostRequest(conn net.Conn, path string, headers map[string]string, body string, acceptsGzip bool) {
 	if !strings.HasPrefix(path, "/files/") || directory == "" {
-		sendResponse(conn, "404 Not Found", "", "")
+		sendResponse(conn, "404 Not Found", "", "", false)
 		return
 	}
 
@@ -118,7 +120,7 @@ func handlePostRequest(conn net.Conn, path string, headers map[string]string, bo
 	contentLength, err := strconv.Atoi(headers["content-length"])
 	if err != nil {
 		fmt.Println("Invalid Content-Length:", err.Error())
-		sendResponse(conn, "400 Bad Request", "", "")
+		sendResponse(conn, "400 Bad Request", "", "", acceptsGzip)
 		return
 	}
 
@@ -128,7 +130,7 @@ func handlePostRequest(conn net.Conn, path string, headers map[string]string, bo
 		_, err := conn.Read(additionalBuffer)
 		if err != nil {
 			fmt.Println("Error reading additional data:", err.Error())
-			sendResponse(conn, "500 Internal Server Error", "", "")
+			sendResponse(conn, "500 Internal Server Error", "", "", acceptsGzip)
 			return
 		}
 		body += string(additionalBuffer)
@@ -137,37 +139,41 @@ func handlePostRequest(conn net.Conn, path string, headers map[string]string, bo
 	err = ioutil.WriteFile(filePath, []byte(body), 0644)
 	if err != nil {
 		fmt.Println("Error writing file:", err.Error())
-		sendResponse(conn, "500 Internal Server Error", "", "")
+		sendResponse(conn, "500 Internal Server Error", "", "", acceptsGzip)
 		return
 	}
 
-	sendResponse(conn, "201 Created", "", "")
+	sendResponse(conn, "201 Created", "", "", false)
 }
 
-func handleFileRequest(conn net.Conn, filename string) {
+func handleFileRequest(conn net.Conn, filename string, acceptsGzip bool) {
 	filePath := filepath.Join(directory, filename)
 	content, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			sendResponse(conn, "404 Not Found", "", "")
+			sendResponse(conn, "404 Not Found", "", "", acceptsGzip)
 		} else {
 			fmt.Println("Error reading file:", err.Error())
-			sendResponse(conn, "500 Internal Server Error", "", "")
+			sendResponse(conn, "500 Internal Server Error", "", "", acceptsGzip)
 		}
 		return
 	}
 
-	sendResponse(conn, "200 OK", "application/octet-stream", string(content))
+	sendResponse(conn, "200 OK", "application/octet-stream", string(content), acceptsGzip)
 }
 
-func sendResponse(conn net.Conn, status, contentType, body string) {
+func sendResponse(conn net.Conn, status, contentType, body string, useGzip bool) {
 	response := fmt.Sprintf("HTTP/1.1 %s\r\n", status)
 
 	if contentType != "" {
 		response += fmt.Sprintf("Content-Type: %s\r\n", contentType)
-		response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
 	}
 
+	if useGzip {
+		response += "Content-Encoding: gzip\r\n"
+	}
+
+	response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
 	response += "\r\n" + body
 
 	_, err := conn.Write([]byte(response))
