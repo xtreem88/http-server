@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -81,7 +83,7 @@ func handleConnection(conn net.Conn) {
 	if method == "GET" {
 		handleGetRequest(conn, path, headers, acceptsGzip)
 	} else if method == "POST" {
-		handlePostRequest(conn, path, headers, strings.Join(lines[bodyStart:], "\r\n"), acceptsGzip)
+		handlePostRequest(conn, path, headers, strings.Join(lines[bodyStart:], "\r\n"))
 	} else {
 		sendResponse(conn, "405 Method Not Allowed", "", "", false)
 	}
@@ -108,7 +110,7 @@ func handleGetRequest(conn net.Conn, path string, headers map[string]string, acc
 	}
 }
 
-func handlePostRequest(conn net.Conn, path string, headers map[string]string, body string, acceptsGzip bool) {
+func handlePostRequest(conn net.Conn, path string, headers map[string]string, body string) {
 	if !strings.HasPrefix(path, "/files/") || directory == "" {
 		sendResponse(conn, "404 Not Found", "", "", false)
 		return
@@ -120,7 +122,7 @@ func handlePostRequest(conn net.Conn, path string, headers map[string]string, bo
 	contentLength, err := strconv.Atoi(headers["content-length"])
 	if err != nil {
 		fmt.Println("Invalid Content-Length:", err.Error())
-		sendResponse(conn, "400 Bad Request", "", "", acceptsGzip)
+		sendResponse(conn, "400 Bad Request", "", "", false)
 		return
 	}
 
@@ -130,7 +132,7 @@ func handlePostRequest(conn net.Conn, path string, headers map[string]string, bo
 		_, err := conn.Read(additionalBuffer)
 		if err != nil {
 			fmt.Println("Error reading additional data:", err.Error())
-			sendResponse(conn, "500 Internal Server Error", "", "", acceptsGzip)
+			sendResponse(conn, "500 Internal Server Error", "", "", false)
 			return
 		}
 		body += string(additionalBuffer)
@@ -139,7 +141,7 @@ func handlePostRequest(conn net.Conn, path string, headers map[string]string, bo
 	err = ioutil.WriteFile(filePath, []byte(body), 0644)
 	if err != nil {
 		fmt.Println("Error writing file:", err.Error())
-		sendResponse(conn, "500 Internal Server Error", "", "", acceptsGzip)
+		sendResponse(conn, "500 Internal Server Error", "", "", false)
 		return
 	}
 
@@ -163,6 +165,21 @@ func handleFileRequest(conn net.Conn, filename string, acceptsGzip bool) {
 }
 
 func sendResponse(conn net.Conn, status, contentType, body string, useGzip bool) {
+	var compressedBody []byte
+	if useGzip {
+		var b bytes.Buffer
+		gz := gzip.NewWriter(&b)
+		if _, err := gz.Write([]byte(body)); err != nil {
+			fmt.Println("Error compressing body:", err.Error())
+			useGzip = false
+		} else if err := gz.Close(); err != nil {
+			fmt.Println("Error closing gzip writer:", err.Error())
+			useGzip = false
+		} else {
+			compressedBody = b.Bytes()
+		}
+	}
+
 	response := fmt.Sprintf("HTTP/1.1 %s\r\n", status)
 
 	if contentType != "" {
@@ -171,13 +188,25 @@ func sendResponse(conn net.Conn, status, contentType, body string, useGzip bool)
 
 	if useGzip {
 		response += "Content-Encoding: gzip\r\n"
+		response += fmt.Sprintf("Content-Length: %d\r\n", len(compressedBody))
+	} else {
+		response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
 	}
 
-	response += fmt.Sprintf("Content-Length: %d\r\n", len(body))
-	response += "\r\n" + body
+	response += "\r\n"
 
 	_, err := conn.Write([]byte(response))
 	if err != nil {
-		fmt.Println("Error writing to connection:", err.Error())
+		fmt.Println("Error writing headers to connection:", err.Error())
+		return
+	}
+
+	if useGzip {
+		_, err = conn.Write(compressedBody)
+	} else {
+		_, err = conn.Write([]byte(body))
+	}
+	if err != nil {
+		fmt.Println("Error writing body to connection:", err.Error())
 	}
 }
